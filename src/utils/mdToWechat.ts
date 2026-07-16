@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { Marked } from 'marked';
 import type { RendererObject } from 'marked';
 
 const MONO = "Consolas, Monaco, 'Courier New', monospace";
@@ -38,6 +38,34 @@ interface ThemeDef {
 }
 
 function s(px: number, scale: number) { return `${(px * scale).toFixed(1)}px`; }
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]!);
+}
+
+function escapeAttribute(value: string): string {
+  return escapeHtml(value);
+}
+
+function safeUrl(value: string, allowMailto = false): string | null {
+  const normalized = [...value].filter((char) => {
+    const code = char.charCodeAt(0);
+    return code > 0x20 && (code < 0x7f || code > 0x9f);
+  }).join('');
+  const scheme = normalized.match(/^([a-z][a-z\d+.-]*):/i)?.[1]?.toLowerCase();
+
+  if (!scheme || scheme === 'http' || scheme === 'https' || (allowMailto && scheme === 'mailto')) {
+    return normalized;
+  }
+
+  return null;
+}
 
 function h1(text: string, sans: string, scale: number, accent: string) {
   return `<h1 style="font-family:${sans};font-size:${s(24, scale)};color:#111;font-weight:700;text-align:center;margin:1.6em 0 0.8em;padding-bottom:0.6em;border-bottom:2px solid ${accent};line-height:1.4;">${text}</h1>`;
@@ -101,11 +129,15 @@ function buildRenderer(scale: number, sans: string, theme: ThemeDef, c: Colors):
       return `<p style="font-family:${sans};font-size:${s(16, scale)};color:#3f3f3f;line-height:1.9;margin:0 0 1.5em 0;">${text}</p>`;
     },
 
+    html() {
+      return '';
+    },
+
     code({ text, lang }) {
       const langTag = lang
-        ? `<div style="font-family:${MONO};font-size:${s(11, scale)};color:#999;padding:10px 14px 0;">${lang}</div>`
+        ? `<div style="font-family:${MONO};font-size:${s(11, scale)};color:#999;padding:10px 14px 0;">${escapeHtml(lang)}</div>`
         : '';
-      const clean = text.replace(/\n$/, '');
+      const clean = escapeHtml(text.replace(/\n$/, ''));
       return `<section style="margin:1.5em 0;border-left:3px solid ${c.accent};background:#f8f8f8;">${langTag}<pre style="margin:0;padding:12px 14px;font-family:${MONO};font-size:${s(13.5, scale)};line-height:1.7;white-space:pre-wrap;color:#333;"><code>${clean}</code></pre></section>`;
     },
 
@@ -166,7 +198,7 @@ function buildRenderer(scale: number, sans: string, theme: ThemeDef, c: Colors):
     },
 
     codespan({ text }) {
-      return `<code style="font-family:${MONO};background:#fff0f0;padding:2px 6px;font-size:90%;color:#c7254e;">${text}</code>`;
+      return `<code style="font-family:${MONO};background:#fff0f0;padding:2px 6px;font-size:90%;color:#c7254e;">${escapeHtml(text)}</code>`;
     },
 
     del({ tokens }) {
@@ -174,31 +206,22 @@ function buildRenderer(scale: number, sans: string, theme: ThemeDef, c: Colors):
     },
 
     link({ href, title, tokens }) {
-      const ti = title ? ` title="${title}"` : '';
-      return `<a href="${href}"${ti} style="color:${c.link};text-decoration:none;font-weight:500;">${this.parser.parseInline(tokens)}</a>`;
+      const text = this.parser.parseInline(tokens);
+      const url = safeUrl(href, true);
+      if (!url) return text;
+
+      const ti = title ? ` title="${escapeAttribute(title)}"` : '';
+      return `<a href="${escapeAttribute(url)}"${ti} style="color:${c.link};text-decoration:none;font-weight:500;">${text}</a>`;
     },
 
     image({ href, title, text }) {
-      const ti = title ? ` title="${title}"` : '';
-      return `<p style="text-align:center;margin:1.5em 0;"><img src="${href}" alt="${text}"${ti} style="max-width:100%;height:auto;"></p>`;
+      const url = safeUrl(href);
+      if (!url) return `<p style="text-align:center;margin:1.5em 0;">${escapeHtml(text)}</p>`;
+
+      const ti = title ? ` title="${escapeAttribute(title)}"` : '';
+      return `<p style="text-align:center;margin:1.5em 0;"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(text)}"${ti} style="max-width:100%;height:auto;"></p>`;
     },
   };
-}
-
-let cacheKey = '';
-
-function getRenderer(fontSize: FontSize, fontFamily: FontFamily, theme: Theme, colorScheme: ColorScheme) {
-  const key = `${fontSize}:${fontFamily}:${theme}:${colorScheme}`;
-  if (key !== cacheKey) {
-    cacheKey = key;
-    const scale = scaleMap[fontSize];
-    const sans = fontMap[fontFamily];
-    const t = themes[theme];
-    const c = colorSchemes[colorScheme];
-    marked.use({ renderer: buildRenderer(scale, sans, t, c) });
-    return { scale, sans };
-  }
-  return { scale: scaleMap[fontSize], sans: fontMap[fontFamily] };
 }
 
 export function mdToWechat(
@@ -208,8 +231,13 @@ export function mdToWechat(
   theme: Theme = 'block',
   colorScheme: ColorScheme = 'forest',
 ): string {
-  const { scale, sans } = getRenderer(fontSize, fontFamily, theme, colorScheme);
-  const body = marked.parse(markdown, { async: false }) as string;
+  const scale = scaleMap[fontSize];
+  const sans = fontMap[fontFamily];
+  const parser = new Marked({
+    async: false,
+    renderer: buildRenderer(scale, sans, themes[theme], colorSchemes[colorScheme]),
+  });
+  const body = parser.parse(markdown) as string;
   const html = `<section style="font-family:${sans};font-size:${s(16, scale)};color:#3f3f3f;line-height:1.9;">${body}</section>`;
   return fixCjkLineBreaks(html);
 }
@@ -223,12 +251,20 @@ const INLINE_TAGS = '(?:strong|em|a|code|del|span)';
 const RE_TAG_PUNCT = new RegExp(`(<\\/${INLINE_TAGS}>)([${PUNCT}])`, 'g');
 
 function fixCjkLineBreaks(html: string): string {
+  const protectedFragments: string[] = [];
+  const protect = (fragment: string) => {
+    const index = protectedFragments.push(fragment) - 1;
+    return `%%CODE_FRAGMENT_${index}%%`;
+  };
+
+  html = html.replace(/<pre\b[\s\S]*?<\/pre>/g, protect);
+  html = html.replace(/<code\b[\s\S]*?<\/code>/g, protect);
   html = html.replace(/>([^<]*)</g, (_full, text: string) => {
     const fixed = text.replace(RE_CJK_PUNCT, '$1&#x2060;$2');
     return `>${fixed}<`;
   });
   html = html.replace(RE_TAG_PUNCT, '$1&#x2060;$2');
-  return html;
+  return html.replace(/%%CODE_FRAGMENT_(\d+)%%/g, (_full, index: string) => protectedFragments[Number(index)]!);
 }
 
 // ── Clipboard ──

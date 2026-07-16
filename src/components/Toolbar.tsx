@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { copyDomToClipboard } from '../utils/mdToWechat';
 import type { FontSize, FontFamily, Theme, ColorScheme } from '../utils/mdToWechat';
 
@@ -38,11 +38,11 @@ const colorOptions: { value: ColorScheme; label: string }[] = [
   { value: 'warm', label: '暖橙' },
 ];
 
-function SettingGroup({ label, options, value, onChange }: {
+function SettingGroup<T extends string>({ label, options, value, onChange }: {
   label: string;
-  options: { value: string; label: string }[];
-  value: string;
-  onChange: (v: any) => void;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
 }) {
   return (
     <div className="setting-group">
@@ -60,13 +60,22 @@ function SettingGroup({ label, options, value, onChange }: {
 
 export default function Toolbar({ hasContent, fontSize, fontFamily, theme, colorScheme, onFontSizeChange, onFontFamilyChange, onThemeChange, onColorSchemeChange }: ToolbarProps) {
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
 
   const handleCopy = useCallback(async () => {
     if (!hasContent) return;
     const ok = await copyDomToClipboard('preview-content');
     if (ok) {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      copiedTimer.current = setTimeout(() => {
+        setCopied(false);
+        copiedTimer.current = null;
+      }, 2000);
     }
   }, [hasContent]);
 

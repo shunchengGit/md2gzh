@@ -8,38 +8,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- `npm run dev` — 启动开发服务器 (Vite)
-- `npm run build` — TypeScript 编译 + Vite 生产构建
-- `npm run lint` — ESLint 检查
-- `npm run preview` — 预览生产构建结果
+- `npm run dev` — 启动 Vite 开发服务器。
+- `npm run build` — 运行 TypeScript project build 并产出 Vite 生产构建。
+- `npm run lint` — 运行 ESLint。
+- `npm run preview` — 本地预览生产构建。
+- `npm run test` — 使用 Vitest 运行 Markdown 转换回归测试。
 
 ## Architecture
 
-### 数据流
+这是一个纯前端的 Markdown 转微信公众号富文本工具。`src/main.tsx` 挂载 React 应用；全局界面样式位于 `src/App.css`，没有 CSS Modules。
 
-`App` 管理全局状态（markdown 文本、字号、字体、主题、色系），通过 `useMemo` 调用 `mdToWechat()` 生成内联样式 HTML，传给 `PreviewPanel` 用 `dangerouslySetInnerHTML` 渲染。
+### Rendering data flow
 
-### 核心模块
+`App` 保存 Markdown 文本和四项排版设置（字号、字体、主题、色系）。它通过 `useMemo` 调用 `mdToWechat()`，并将生成的 HTML 传给 `PreviewPanel`，后者使用 `dangerouslySetInnerHTML` 渲染文章内容。`Toolbar` 只负责修改设置和触发复制，`EditorPanel` 是受控 `textarea`。
 
-- **`src/utils/mdToWechat.ts`** — 核心转换逻辑。使用 `marked` 库的自定义 Renderer 生成全内联样式的 HTML（公众号不支持外部 CSS）。包含：
-  - 3 套主题（双线/色块/简约）— 控制标题展示策略
-  - 3 套色系（墨绿/靛蓝/暖橙）— 控制配色
-  - 3 种字号、3 种字体
-  - `fixCjkLineBreaks()` — 在 CJK 字符与标点间插入 word-joiner 防止断行
-  - `copyDomToClipboard()` — 通过 DOM Range 选区 + `execCommand('copy')` 复制富文本
+### Markdown conversion and copying
 
-### 组件结构
+`src/utils/mdToWechat.ts` 是核心领域模块：
 
-- `App` → `Toolbar` + `EditorPanel` + `PreviewPanel`
-- `Toolbar` 包含多个 `SettingGroup` 子组件，统一渲染设置按钮组
-- `EditorPanel` 是纯 textarea，`PreviewPanel` 模拟公众号文章外壳（日期头、阅读量尾）
-
-### 样式
-
-全部在 `App.css` 中，无 CSS Modules。公众号排版样式由 `mdToWechat.ts` 的 Renderer 以内联 style 输出，与应用自身 UI 样式完全分离。
+- 它为独立的 `Marked` 实例设置自定义 renderer，为块级与行内 Markdown 元素生成公众号可用的全内联样式 HTML，不共享或修改全局 parser 状态。
+- 字号、字体、三种主题（双线、色块、简约）与三种色系（墨绿、靛蓝、暖橙）共同决定每次转换的 renderer 输出。
+- 原始 HTML 会被移除；自定义 renderer 必须按 HTML/属性上下文转义输入，并限制链接与图片 URL 为安全协议。
+- `fixCjkLineBreaks()` 在中文字符和标点、以及行内标签后的标点间插入 word-joiner，避免公众号中的不当断行；它必须跳过 `code` 与 `pre` 内容。
+- `copyDomToClipboard()` 选中预览 DOM 并通过 `document.execCommand('copy')` 复制富文本。它不能替换为纯 Clipboard API，否则粘贴内容会丢失格式。
 
 ## Key Constraints
 
-- 公众号编辑器不支持外部 CSS / class，所有排版样式必须内联
-- 复制功能使用 `document.execCommand('copy')` 而非 Clipboard API，因为需要复制富文本格式
-- `marked.use()` 修改全局 renderer，代码中通过 `cacheKey` 做简单缓存避免重复注册
+- 公众号编辑器不支持外部 CSS 或 class；文章输出的全部样式必须保留为内联 `style`。
+- 预览 HTML 来自用户输入的 Markdown，并直接插入 DOM。修改转换器时应保持对 `marked` 输出和 URL/属性处理的安全性审查。
+- 应用自身的界面布局样式与被复制的文章样式必须分离：前者放在 `App.css`，后者留在转换器的 HTML 中。
+
+## Deployment
+
+生产站点为 `https://md.underpinetree.com`，部署在 `115.190.148.200`。每次发布前先本地运行 `npm run test && npm run lint && npm run build`，再将 `dist/` 同步到服务器的 `/var/www/md2gzh/current/`；该目录是当前在线版本，更新前应确认构建成功。
+
+Nginx 站点配置位于服务器的 `/etc/nginx/conf.d/md-underpinetree.conf`。修改配置后必须先执行 `nginx -t`，再 `systemctl reload nginx`，不要改动同机其他子域的配置。
+
+TLS 使用 Let’s Encrypt：证书位于 `/etc/letsencrypt/live/md.underpinetree.com/`，由已启用的 Certbot 自动续期任务维护。若调整 HTTP 站点配置，必须保留 `/.well-known/acme-challenge/` 路径以支持续期。
